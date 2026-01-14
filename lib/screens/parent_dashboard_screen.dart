@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/api_service.dart';
+import 'lock_screen/logic/update_manager.dart';
 import 'login_screen.dart';
 import 'lock_screen/lock_screen.dart';
 import 'report_screen.dart';
@@ -23,6 +24,9 @@ class _ParentDashboardScreenState extends State<ParentDashboardScreen> {
   void initState() {
     super.initState();
     _loadData();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      UpdateManager.checkForUpdate(context);
+    });
   }
 
   Future<void> _loadData() async {

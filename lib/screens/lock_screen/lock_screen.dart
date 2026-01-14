@@ -5,8 +5,8 @@ import 'package:shared_preferences/shared_preferences.dart'; // مهم للتح�
 import 'package:url_launcher/url_launcher.dart';
 import '../../../services/api_service.dart';
 import 'models/math_pro_screen.dart';
-// تأكد من المسار الصحيح
 import '../../widgets/feedback_dialog.dart';
+import '../lock_screen/logic/update_manager.dart';
 
 class LockScreen extends StatefulWidget {
   final int studentId;
@@ -44,13 +44,13 @@ class _LockScreenState extends State<LockScreen> {
     _loadQuiz();
     _requestBatteryPermission();
 
-    if (!widget.isParentPreview) {
-      _startSessionCheck();
-    }
     // تشغيل التحقق فقط إذا كان طالباً (وليس معاينة أب)
     if (!widget.isParentPreview) {
       _startSessionCheck();
     }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      UpdateManager.checkForUpdate(context);
+    });
   }
 
   Future<void> _requestBatteryPermission() async {
