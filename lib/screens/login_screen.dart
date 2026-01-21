@@ -2,14 +2,15 @@ import 'dart:io';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:package_info_plus/package_info_plus.dart'; // 👈 مكتبة معلومات النسخة
-import 'package:url_launcher/url_launcher.dart'; // 👈 لفتح رابط التحميل
+import 'package:package_info_plus/package_info_plus.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../services/api_service.dart';
 import 'lock_screen/lock_screen.dart';
 import 'register_student_screen.dart';
-import 'register_parent_screen.dart'; // 👈 تأكدنا من استدعاء شاشة تسجيل الأب
+import 'register_parent_screen.dart';
 import 'parent_dashboard_screen.dart';
+import 'lock_screen/logic/update_manager.dart'; // Import UpdateManager
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -31,9 +32,9 @@ class _LoginScreenState extends State<LoginScreen> {
     super.initState();
     _tryAutoLogin();
 
-    // 👇 فحص التحديثات بعد ثانية من فتح الشاشة
-    Future.delayed(const Duration(seconds: 1), () {
-      _checkForUpdates();
+    // Use centralized UpdateManager
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      UpdateManager.checkForUpdate(context);
     });
   }
 

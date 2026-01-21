@@ -29,12 +29,9 @@ function get_input_data() {
 }
 
 // ---------------------------------------------------------
-// بيانات الاتصال (تأكد أنها صحيحة 100%)
+// جلب المتغيرات من ملف خارجي
 // ---------------------------------------------------------
-$host      = "localhost";
-$db_name   = "u317488478_db_schema";
-$db_user   = "u317488478_db_schema";
-$db_pass   = "@#Aa!@EDd1";
+require_once 'variables.php';
 
 try {
     $pdo = new PDO("mysql:host=$host;dbname=$db_name;charset=utf8mb4", $db_user, $db_pass, [
@@ -180,14 +177,28 @@ switch ($action) {
     // --- 5. جلب أبناء ولي الأمر ---
     case 'get_my_children': {
         $pid = (int)($input['parent_id'] ?? 0);
-        $stmt = $pdo->prepare("
-            SELECT u.id, u.full_name, u.grade_level, u.username,
-            (SELECT COUNT(*) FROM daily_logs dl WHERE dl.student_id = u.id AND dl.log_date = CURDATE()) as logged_today,
-            (SELECT score FROM daily_logs dl WHERE dl.student_id = u.id ORDER BY log_date DESC LIMIT 1) as last_score
-            FROM users u WHERE u.parent_id = ?
-        ");
-        $stmt->execute([$pid]);
-        respond(['status' => 'success', 'data' => $stmt->fetchAll()]);
+        try {
+            // المحاولة الأولى: مع السجلات اليومية (إذا كان الجدول موجوداً)
+            // Added u.request_status
+            $stmt = $pdo->prepare("
+                SELECT u.id, u.full_name, u.grade_level, u.username, u.request_status,
+                (SELECT COUNT(*) FROM daily_logs dl WHERE dl.student_id = u.id AND dl.log_date = CURDATE()) as logged_today,
+                (SELECT score FROM daily_logs dl WHERE dl.student_id = u.id ORDER BY log_date DESC LIMIT 1) as last_score
+                FROM users u WHERE u.parent_id = ? AND u.user_type = 'student'
+            ");
+            $stmt->execute([$pid]);
+            respond(['status' => 'success', 'data' => $stmt->fetchAll()]);
+        } catch (PDOException $e) {
+            // المحاولة الثانية: استعلام بسيط
+            try {
+                 // Added request_status
+                 $stmt = $pdo->prepare("SELECT id, full_name, grade_level, username, request_status FROM users WHERE parent_id = ? AND user_type = 'student'");
+                 $stmt->execute([$pid]);
+                 respond(['status' => 'success', 'data' => $stmt->fetchAll()]);
+            } catch (Exception $ex) {
+                 respond(['status' => 'error', 'message' => $ex->getMessage()]);
+            }
+        }
         break;
     }
 
@@ -226,7 +237,7 @@ switch ($action) {
         $check->execute([$sid, $pid]);
         if (!$check->fetch()) respond(['status' => 'error', 'message' => 'ليس ابنك'], 403);
 
-        $pdo->prepare("UPDATE users SET device_id = NULL WHERE id = ?")->execute([$sid]);
+        $pdo->prepare("UPDATE users SET device_id = NULL, request_status = 'none' WHERE id = ?")->execute([$sid]);
         respond(['status' => 'success', 'message' => 'Logged out']);
         break;
     }
@@ -236,17 +247,229 @@ switch ($action) {
         $sid = (int)($input['student_id'] ?? 0);
         $did = trim($input['device_id'] ?? '');
 
-        $stmt = $pdo->prepare("SELECT device_id FROM users WHERE id = ?");
+        // Fetch all fields including parent_message if exists
+        $stmt = $pdo->prepare("SELECT * FROM users WHERE id = ?");
         $stmt->execute([$sid]);
         $user = $stmt->fetch();
 
         if ($user && $user['device_id'] === $did && $did !== '') {
-            respond(['status' => 'active']);
+            $reqStatus = $user['request_status'] ?? 'none';
+            $msg = $user['parent_message'] ?? '';
+
+            respond([
+                'status' => 'active',
+                'request_status' => $reqStatus,
+                'parent_message' => $msg
+            ]);
         } else {
             respond(['status' => 'logged_out']);
         }
         break;
     }
+
+    // --- New Actions for Exit/Unlock Requests ---
+
+    case 'acknowledge_alert': {
+        $sid = (int)($input['student_id'] ?? 0);
+        // Reset status to none after student sees the alert
+        $pdo->prepare("UPDATE users SET request_status = 'none', parent_message = NULL WHERE id = ?")->execute([$sid]);
+        respond(['status' => 'success']);
+        break;
+    }
+
+    case 'request_exit': {
+        $sid = (int)($input['student_id'] ?? 0);
+        try {
+            $pdo->prepare("UPDATE users SET request_status = 'exit_pending' WHERE id = ?")->execute([$sid]);
+            respond(['status' => 'success']);
+        } catch (PDOException $e) {
+            // Auto-fix: Add column if missing
+            if (strpos($e->getMessage(), 'Unknown column') !== false) {
+                 try {
+                     $pdo->exec("ALTER TABLE users ADD COLUMN IF NOT EXISTS request_status ENUM('none', 'exit_pending', 'unlock_pending', 'exit_approved', 'unlock_approved') DEFAULT 'none'");
+                     // Retry
+                     $pdo->prepare("UPDATE users SET request_status = 'exit_pending' WHERE id = ?")->execute([$sid]);
+                     respond(['status' => 'success']);
+                 } catch (Exception $ex) {
+                     respond(['status' => 'error', 'message' => 'DB Error (Retry Failed): ' . $ex->getMessage()]);
+                 }
+            } else {
+                 respond(['status' => 'error', 'message' => 'DB Error: ' . $e->getMessage()]);
+            }
+        }
+        break;
+    }
+
+    case 'request_unlock': {
+        $sid = (int)($input['student_id'] ?? 0);
+        try {
+            $pdo->prepare("UPDATE users SET request_status = 'unlock_pending' WHERE id = ?")->execute([$sid]);
+            respond(['status' => 'success']);
+        } catch (PDOException $e) {
+             // Auto-fix: Add column if missing
+            if (strpos($e->getMessage(), 'Unknown column') !== false) {
+                 try {
+                     $pdo->exec("ALTER TABLE users ADD COLUMN IF NOT EXISTS request_status ENUM('none', 'exit_pending', 'unlock_pending', 'exit_approved', 'unlock_approved') DEFAULT 'none'");
+                     // Retry
+                     $pdo->prepare("UPDATE users SET request_status = 'unlock_pending' WHERE id = ?")->execute([$sid]);
+                     respond(['status' => 'success']);
+                 } catch (Exception $ex) {
+                     respond(['status' => 'error', 'message' => 'DB Error (Retry Failed): ' . $ex->getMessage()]);
+                 }
+            } else {
+                 respond(['status' => 'error', 'message' => 'DB Error: ' . $e->getMessage()]);
+            }
+        }
+        break;
+    }
+
+    case 'approve_exit': {
+        $pid = (int)($input['parent_id'] ?? 0);
+        $sid = (int)($input['student_id'] ?? 0);
+
+        // Verify parent
+        $check = $pdo->prepare("SELECT id FROM users WHERE id = ? AND parent_id = ?");
+        $check->execute([$sid, $pid]);
+        if (!$check->fetch()) respond(['status' => 'error', 'message' => 'Not your child'], 403);
+
+        try {
+            // Approve exit means logging them out (clearing device_id)
+            $pdo->prepare("UPDATE users SET device_id = NULL, request_status = 'exit_approved' WHERE id = ?")->execute([$sid]);
+            respond(['status' => 'success']);
+        } catch (PDOException $e) {
+             if (strpos($e->getMessage(), 'Unknown column') !== false) {
+                 try {
+                     $pdo->exec("ALTER TABLE users ADD COLUMN IF NOT EXISTS request_status ENUM('none', 'exit_pending', 'unlock_pending', 'exit_approved', 'unlock_approved', 'exit_rejected', 'unlock_rejected') DEFAULT 'none'");
+                     $pdo->prepare("UPDATE users SET device_id = NULL, request_status = 'exit_approved' WHERE id = ?")->execute([$sid]);
+                     respond(['status' => 'success']);
+                 } catch (Exception $ex) {
+                     respond(['status' => 'error', 'message' => 'DB Error: ' . $ex->getMessage()]);
+                 }
+            } else {
+                 respond(['status' => 'error', 'message' => 'DB Error: ' . $e->getMessage()]);
+            }
+        }
+        break;
+    }
+
+    case 'reject_exit': {
+        $pid = (int)($input['parent_id'] ?? 0);
+        $sid = (int)($input['student_id'] ?? 0);
+        $msg = trim($input['message'] ?? '');
+
+        // Verify parent
+        $check = $pdo->prepare("SELECT id FROM users WHERE id = ? AND parent_id = ?");
+        $check->execute([$sid, $pid]);
+        if (!$check->fetch()) respond(['status' => 'error', 'message' => 'Not your child'], 403);
+
+        try {
+            $pdo->prepare("UPDATE users SET request_status = 'exit_rejected', parent_message = ? WHERE id = ?")->execute([$msg, $sid]);
+            respond(['status' => 'success']);
+        } catch (PDOException $e) {
+             if (strpos($e->getMessage(), 'Unknown column') !== false) {
+                 try {
+                     // Add both columns if missing
+                     $pdo->exec("ALTER TABLE users ADD COLUMN IF NOT EXISTS request_status ENUM('none', 'exit_pending', 'unlock_pending', 'exit_approved', 'unlock_approved', 'exit_rejected', 'unlock_rejected') DEFAULT 'none'");
+                     $pdo->exec("ALTER TABLE users ADD COLUMN IF NOT EXISTS parent_message TEXT DEFAULT NULL");
+
+                     $pdo->prepare("UPDATE users SET request_status = 'exit_rejected', parent_message = ? WHERE id = ?")->execute([$msg, $sid]);
+                     respond(['status' => 'success']);
+                 } catch (Exception $ex) {
+                     respond(['status' => 'error', 'message' => 'DB Error: ' . $ex->getMessage()]);
+                 }
+            } else {
+                 respond(['status' => 'error', 'message' => 'DB Error: ' . $e->getMessage()]);
+            }
+        }
+        break;
+    }
+
+    case 'reject_unlock': {
+        $pid = (int)($input['parent_id'] ?? 0);
+        $sid = (int)($input['student_id'] ?? 0);
+        $msg = trim($input['message'] ?? '');
+
+        $check = $pdo->prepare("SELECT id FROM users WHERE id = ? AND parent_id = ?");
+        $check->execute([$sid, $pid]);
+        if (!$check->fetch()) respond(['status' => 'error'], 403);
+
+        try {
+            $pdo->prepare("UPDATE users SET request_status = 'unlock_rejected', parent_message = ? WHERE id = ?")->execute([$msg, $sid]);
+            respond(['status' => 'success']);
+        } catch (PDOException $e) {
+             if (strpos($e->getMessage(), 'Unknown column') !== false) {
+                 try {
+                     $pdo->exec("ALTER TABLE users ADD COLUMN IF NOT EXISTS request_status ENUM('none', 'exit_pending', 'unlock_pending', 'exit_approved', 'unlock_approved', 'exit_rejected', 'unlock_rejected') DEFAULT 'none'");
+                     $pdo->exec("ALTER TABLE users ADD COLUMN IF NOT EXISTS parent_message TEXT DEFAULT NULL");
+
+                     $pdo->prepare("UPDATE users SET request_status = 'unlock_rejected', parent_message = ? WHERE id = ?")->execute([$msg, $sid]);
+                     respond(['status' => 'success']);
+                 } catch (Exception $ex) {
+                     respond(['status' => 'error', 'message' => 'DB Error: ' . $ex->getMessage()]);
+                 }
+            } else {
+                 respond(['status' => 'error', 'message' => 'DB Error: ' . $e->getMessage()]);
+            }
+        }
+        break;
+    }
+
+    case 'approve_unlock': {
+        $pid = (int)($input['parent_id'] ?? 0);
+        $sid = (int)($input['student_id'] ?? 0);
+
+        $check = $pdo->prepare("SELECT id FROM users WHERE id = ? AND parent_id = ?");
+        $check->execute([$sid, $pid]);
+        if (!$check->fetch()) respond(['status' => 'error'], 403);
+
+        try {
+            $pdo->prepare("UPDATE users SET request_status = 'unlock_approved' WHERE id = ?")->execute([$sid]);
+            respond(['status' => 'success']);
+        } catch (PDOException $e) {
+             if (strpos($e->getMessage(), 'Unknown column') !== false) {
+                 try {
+                     $pdo->exec("ALTER TABLE users ADD COLUMN IF NOT EXISTS request_status ENUM('none', 'exit_pending', 'unlock_pending', 'exit_approved', 'unlock_approved', 'exit_rejected', 'unlock_rejected') DEFAULT 'none'");
+                     $pdo->prepare("UPDATE users SET request_status = 'unlock_approved' WHERE id = ?")->execute([$sid]);
+                     respond(['status' => 'success']);
+                 } catch (Exception $ex) {
+                     respond(['status' => 'error', 'message' => 'DB Error: ' . $ex->getMessage()]);
+                 }
+            } else {
+                 respond(['status' => 'error', 'message' => 'DB Error: ' . $e->getMessage()]);
+            }
+        }
+        break;
+    }
+
+    case 'remote_unlock': {
+        $pid = (int)($input['parent_id'] ?? 0);
+        $sid = (int)($input['student_id'] ?? 0);
+
+        $check = $pdo->prepare("SELECT id FROM users WHERE id = ? AND parent_id = ?");
+        $check->execute([$sid, $pid]);
+        if (!$check->fetch()) respond(['status' => 'error'], 403);
+
+        try {
+            // Force unlock
+            $pdo->prepare("UPDATE users SET request_status = 'unlock_approved' WHERE id = ?")->execute([$sid]);
+            respond(['status' => 'success']);
+        } catch (PDOException $e) {
+             if (strpos($e->getMessage(), 'Unknown column') !== false) {
+                 try {
+                     $pdo->exec("ALTER TABLE users ADD COLUMN IF NOT EXISTS request_status ENUM('none', 'exit_pending', 'unlock_pending', 'exit_approved', 'unlock_approved', 'exit_rejected', 'unlock_rejected') DEFAULT 'none'");
+                     $pdo->prepare("UPDATE users SET request_status = 'unlock_approved' WHERE id = ?")->execute([$sid]);
+                     respond(['status' => 'success']);
+                 } catch (Exception $ex) {
+                     respond(['status' => 'error', 'message' => 'DB Error: ' . $ex->getMessage()]);
+                 }
+            } else {
+                 respond(['status' => 'error', 'message' => 'DB Error: ' . $e->getMessage()]);
+            }
+        }
+        break;
+    }
+
+    // --- 9. جلب الأسئلة ---
 
     // --- 9. جلب الأسئلة ---
     case 'get_quiz': {
@@ -259,69 +482,62 @@ switch ($action) {
 
     // --- 10. حفظ النتيجة ---
     case 'submit_quiz': {
-        respond(['status' => 'success']);
-        break;
-    }
+        $sid = (int)($input['student_id'] ?? 0);
+        $score = (int)($input['score'] ?? 0);
+        $details = $input['details'] ?? []; // JSON format if needed
 
-// =========================================================
-    // 11. الأب يضيف ابناً جديداً من لوحة تحكمه مباشرة
-    // =========================================================
-    case 'create_child_account': {
-        $parent_id = (int)($input['parent_id'] ?? 0);
-        $full_name = trim($input['full_name'] ?? '');
-        $username = trim($input['username'] ?? '');
-        $password = trim($input['password'] ?? '');
-        $grade_level = trim($input['grade_level'] ?? '');
-
-        if ($parent_id <= 0 || $full_name === '' || $username === '' || $password === '' || $grade_level === '') {
-            respond(['status' => 'error', 'message' => 'جميع البيانات مطلوبة'], 400);
-        }
-
-        // التأكد من أن اسم المستخدم غير مستخدم
-        $check = $pdo->prepare("SELECT id FROM users WHERE username = ?");
-        $check->execute([$username]);
-        if ($check->fetch()) {
-            respond(['status' => 'error', 'message' => 'اسم المستخدم محجوز مسبقاً'], 400);
+        if ($sid <= 0) {
+            respond(['status' => 'error', 'message' => 'Invalid student ID'], 400);
         }
 
         try {
-            // إضافة الابن وربطه بالأب فوراً (بدون device_id حالياً)
-            $stmt = $pdo->prepare("
-                INSERT INTO users (full_name, username, password_hash, user_type, grade_level, parent_id, created_at)
-                VALUES (:full_name, :username, :password, 'student', :grade, :pid, NOW())
-            ");
-            $stmt->execute([
-                ':full_name' => $full_name,
-                ':username' => $username,
-                ':password' => $password,
-                ':grade' => $grade_level,
-                ':pid' => $parent_id,
-            ]);
+            // Save to daily_logs
+            // Note: We use details field as a text/json dump
+            $detailsJson = json_encode($details, JSON_UNESCAPED_UNICODE);
 
-            respond(['status' => 'success', 'message' => 'تم إضافة الابن بنجاح']);
+            $stmt = $pdo->prepare("INSERT INTO daily_logs (student_id, score, details, log_date, created_at) VALUES (?, ?, ?, CURDATE(), NOW())");
+            $stmt->execute([$sid, $score, $detailsJson]);
+
+            respond(['status' => 'success']);
         } catch (PDOException $e) {
-            respond(['status' => 'error', 'message' => 'فشل الإضافة: ' . $e->getMessage()], 500);
+            // Auto-create table if missing
+            if (strpos($e->getMessage(), "doesn't exist") !== false) {
+                 try {
+                     $pdo->exec("CREATE TABLE IF NOT EXISTS daily_logs (
+                         id INT AUTO_INCREMENT PRIMARY KEY,
+                         student_id INT NOT NULL,
+                         score INT DEFAULT 0,
+                         details TEXT,
+                         log_date DATE,
+                         created_at DATETIME,
+                         FOREIGN KEY (student_id) REFERENCES users(id) ON DELETE CASCADE
+                     ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
+
+                     // Retry insert
+                     $stmt = $pdo->prepare("INSERT INTO daily_logs (student_id, score, details, log_date, created_at) VALUES (?, ?, ?, CURDATE(), NOW())");
+                     $stmt->execute([$sid, $score, json_encode($details, JSON_UNESCAPED_UNICODE)]);
+                     respond(['status' => 'success']);
+                 } catch (Exception $ex) {
+                     respond(['status' => 'error', 'message' => 'Create Table Failed: ' . $ex->getMessage()]);
+                 }
+            } else {
+                 respond(['status' => 'error', 'message' => 'DB Error: ' . $e->getMessage()]);
+            }
         }
         break;
     }
+
+
 // =========================================================
     // 12. التحقق من التحديثات
     // =========================================================
     case 'check_update': {
-        // 👇 هنا أنت تكتب رقم أحدث نسخة لديك يدوياً
-        $latest_version = "1.0.1";
-
-        // 👇 هنا تضع رابط ملف الـ APK المباشر على استضافتك
-        $download_url = "https://amjd.law/apk/app-release.apk";
-
-        // هل التحديث إجباري؟ (true = نعم، false = لا)
-        $force_update = true;
-
+        // نستخدم المتغيرات المعرفة في أعلى الملف
         respond([
             'status' => 'success',
-            'version' => $latest_version,
-            'url' => $download_url,
-            'force' => $force_update
+            'version' => $LATEST_VERSION,
+            'url' => $DOWNLOAD_URL,
+            'force' => $FORCE_UPDATE
         ]);
         break;
     }

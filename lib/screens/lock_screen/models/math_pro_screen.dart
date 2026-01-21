@@ -23,7 +23,7 @@ class _MathProScreenState extends State<MathProScreen> {
   List<int> _bottomDigits = [];
   String _operator = "+";
 
-  Map<int, BorrowState> _borrowStates = {};
+  final Map<int, BorrowState> _borrowStates = {};
 
   List<String> _carryInputs = [];
   List<String> _resultInputs = [];
@@ -287,16 +287,14 @@ class _MathProScreenState extends State<MathProScreen> {
               ),
             ),
           ),
-        ...cols
-            .map(
-              (colIdx) => Container(
-                width: _cellSize,
-                margin: const EdgeInsets.symmetric(horizontal: 2),
-                alignment: Alignment.center,
-                child: cellBuilder(colIdx),
-              ),
-            )
-            .toList(),
+        ...cols.map(
+          (colIdx) => Container(
+            width: _cellSize,
+            margin: const EdgeInsets.symmetric(horizontal: 2),
+            alignment: Alignment.center,
+            child: cellBuilder(colIdx),
+          ),
+        ),
       ],
     );
   }

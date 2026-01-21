@@ -123,29 +123,15 @@ class ApiService {
     }
   }
 
-  // دالة جديدة لجلب الأبناء
-  Future<List<dynamic>> getMyChildren(int parentId) async {
-    try {
-      final response = await http.post(
-        Uri.parse(baseUrl),
-        body: jsonEncode({'action': 'get_my_children', 'parent_id': parentId}),
-      );
-      final data = jsonDecode(response.body);
-      if (data['status'] == 'success') {
-        return data['data'];
-      }
-      return [];
-    } catch (e) {
-      return [];
-    }
-  }
-
   Future<Map<String, dynamic>> loginStudent({required String deviceId}) async {
     try {
       final response = await http.post(
         Uri.parse(baseUrl),
+        headers: {'Content-Type': 'application/json'},
         body: jsonEncode({'action': 'login_student', 'device_id': deviceId}),
       );
+      if (response.body.isEmpty)
+        return {'status': 'error', 'message': 'Empty response from server'};
       return jsonDecode(response.body);
     } catch (e) {
       return {'status': 'error', 'message': e.toString()};
@@ -160,6 +146,7 @@ class ApiService {
     try {
       final response = await http.post(
         Uri.parse(baseUrl),
+        headers: {'Content-Type': 'application/json'},
         body: jsonEncode({
           'action': 'login_student_manual',
           'username': username,
@@ -167,6 +154,11 @@ class ApiService {
           'device_id': deviceId,
         }),
       );
+
+      if (response.body.isEmpty) {
+        return {'status': 'error', 'message': 'Server returned empty response'};
+      }
+
       return jsonDecode(response.body);
     } catch (e) {
       return {'status': 'error', 'message': e.toString()};
@@ -178,7 +170,22 @@ class ApiService {
     required String username,
     required String password,
   }) async {
-    return {'status': 'success'};
+    try {
+      final response = await http.post(
+        Uri.parse(baseUrl),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'action': 'register_parent',
+          'full_name': fullName,
+          'username': username,
+          'password': password,
+        }),
+      );
+      if (response.body.isEmpty) return {'status': 'error'};
+      return jsonDecode(response.body);
+    } catch (e) {
+      return {'status': 'error', 'message': e.toString()};
+    }
   }
 
   Future<Map<String, dynamic>> promoteUserToAdmin({
@@ -196,6 +203,7 @@ class ApiService {
     try {
       final response = await http.post(
         Uri.parse(baseUrl),
+        headers: {'Content-Type': 'application/json'},
         body: jsonEncode({
           'action': 'submit_quiz',
           'student_id': studentId,
@@ -203,6 +211,7 @@ class ApiService {
           'details': details,
         }),
       );
+      if (response.body.isEmpty) return false;
       final data = jsonDecode(response.body);
       return data['status'] == 'success';
     } catch (e) {
@@ -360,6 +369,7 @@ class ApiService {
     try {
       final response = await http.post(
         Uri.parse(baseUrl),
+        headers: {'Content-Type': 'application/json'},
         body: jsonEncode({
           'action': 'verify_parent_password',
           'student_id': studentId,
@@ -367,7 +377,7 @@ class ApiService {
         }),
       );
 
-      if (response.statusCode == 200) {
+      if (response.statusCode == 200 && response.body.isNotEmpty) {
         final data = jsonDecode(response.body);
         return data['status'] == 'success';
       }
@@ -380,41 +390,66 @@ class ApiService {
   // 👇 أضف هذه الدوال داخل كلاس ApiService
 
   // 1. للأب: طرد الابن
-  Future<bool> remoteLogoutChild(int parentId, int studentId) async {
+  // Returns null if success, or error message string
+  Future<String?> remoteLogoutChild(int parentId, int studentId) async {
     try {
       final response = await http.post(
         Uri.parse(baseUrl),
+        headers: {'Content-Type': 'application/json'},
         body: jsonEncode({
           'action': 'remote_logout_student',
           'parent_id': parentId,
           'student_id': studentId,
         }),
       );
+      if (response.body.isEmpty) return "Empty response";
       final data = jsonDecode(response.body);
-      return data['status'] == 'success';
+      if (data['status'] == 'success') return null;
+      return data['message'] ?? "Server Error";
     } catch (e) {
-      return false;
+      return "Connection Error: $e";
     }
   }
 
-  // 2. للابن: التحقق من الجلسة
+  // 2. للابن: التحقق من الجلسة (بسيط)
   Future<bool> checkSessionStatus(int studentId, String currentDeviceId) async {
     try {
       final response = await http.post(
         Uri.parse(baseUrl),
+        headers: {'Content-Type': 'application/json'},
         body: jsonEncode({
           'action': 'check_session_status',
           'student_id': studentId,
           'device_id': currentDeviceId,
         }),
       );
+      if (response.body.isEmpty) return true;
       final data = jsonDecode(response.body);
-      // إذا الحالة active نرجع true (ما زال مسموحاً له)
-      // إذا logged_out نرجع false (يجب طرده)
       return data['status'] == 'active';
     } catch (e) {
-      // في حال انقطاع النت، نفترض أنه ما زال مسجلاً حتى لا نطرده بالخطأ
       return true;
+    }
+  }
+
+  // 2-ب. للابن: التحقق من الجلسة (كامل مع حالة الطلبات)
+  Future<Map<String, dynamic>> checkFullSessionStatus(
+    int studentId,
+    String currentDeviceId,
+  ) async {
+    try {
+      final response = await http.post(
+        Uri.parse(baseUrl),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'action': 'check_session_status',
+          'student_id': studentId,
+          'device_id': currentDeviceId,
+        }),
+      );
+      if (response.body.isEmpty) return {'status': 'error'};
+      return jsonDecode(response.body);
+    } catch (e) {
+      return {'status': 'error', 'message': e.toString()};
     }
   }
 
@@ -428,6 +463,7 @@ class ApiService {
     try {
       final response = await http.post(
         Uri.parse(baseUrl),
+        headers: {'Content-Type': 'application/json'},
         body: jsonEncode({
           'action': 'create_child_account',
           'parent_id': parentId,
@@ -437,19 +473,207 @@ class ApiService {
           'grade_level': gradeLevel,
         }),
       );
+      if (response.body.isEmpty)
+        return {'status': 'error', 'message': 'Empty response'};
       return jsonDecode(response.body);
     } catch (e) {
       return {'status': 'error', 'message': e.toString()};
     }
   }
 
-  // 👇 دالة التحقق من التحديث
+  // 3. للأب: جلب قائمة الأبناء
+  Future<List<dynamic>> getMyChildren(int parentId) async {
+    try {
+      final response = await http.post(
+        Uri.parse(baseUrl),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'action': 'get_my_children', 'parent_id': parentId}),
+      );
+      if (response.body.isEmpty) return [];
+      final data = jsonDecode(response.body);
+      if (data['status'] == 'success') {
+        return data['data'] ?? []; // Corrected key from 'children' to 'data'
+      }
+      return [];
+    } catch (e) {
+      return [];
+    }
+  }
+
+  // 4. للابن: إرسال طلب خروج
+  // Returns null if success, or error message string
+  Future<String?> sendExitRequest(int studentId) async {
+    try {
+      final response = await http.post(
+        Uri.parse(baseUrl),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'action': 'request_exit', 'student_id': studentId}),
+      );
+      if (response.body.isEmpty) return "Empty response";
+      final data = jsonDecode(response.body);
+      if (data['status'] == 'success') return null;
+      return data['message'] ?? "Server Error: ${response.body}";
+    } catch (e) {
+      return "Connection Error: $e";
+    }
+  }
+
+  // 5. للابن: إرسال طلب فتح القفل
+  // Returns null if success, or error message string
+  Future<String?> sendUnlockRequest(int studentId) async {
+    try {
+      final response = await http.post(
+        Uri.parse(baseUrl),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'action': 'request_unlock', 'student_id': studentId}),
+      );
+      if (response.body.isEmpty) return "Empty response";
+      final data = jsonDecode(response.body);
+      if (data['status'] == 'success') return null;
+      return data['message'] ?? "Server Error: ${response.body}";
+    } catch (e) {
+      return "Connection Error: $e";
+    }
+  }
+
+  // 6. للأب: الموافقة على طلب الخروج
+  Future<String?> approveExitRequest(int parentId, int studentId) async {
+    try {
+      final response = await http.post(
+        Uri.parse(baseUrl),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'action': 'approve_exit',
+          'parent_id': parentId,
+          'student_id': studentId,
+        }),
+      );
+      if (response.body.isEmpty) return "Empty response";
+      final data = jsonDecode(response.body);
+      if (data['status'] == 'success') return null;
+      return data['message'] ?? "Server Error";
+    } catch (e) {
+      return "Connection Error: $e";
+    }
+  }
+
+  // 8. للأب: الموافقة على طلب فتح القفل
+  Future<String?> approveUnlockRequest(int parentId, int studentId) async {
+    try {
+      final response = await http.post(
+        Uri.parse(baseUrl),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'action': 'approve_unlock',
+          'parent_id': parentId,
+          'student_id': studentId,
+        }),
+      );
+      if (response.body.isEmpty) return "Empty response";
+      final data = jsonDecode(response.body);
+      if (data['status'] == 'success') return null;
+      return data['message'] ?? "Server Error";
+    } catch (e) {
+      return "Connection Error: $e";
+    }
+  }
+
+  // 7. للأب: فتح القفل عن بعد (Unlock)
+  Future<String?> remoteUnlockChild(int parentId, int studentId) async {
+    try {
+      final response = await http.post(
+        Uri.parse(baseUrl),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'action': 'remote_unlock',
+          'parent_id': parentId,
+          'student_id': studentId,
+        }),
+      );
+      if (response.body.isEmpty) return "Empty response";
+      final data = jsonDecode(response.body);
+      if (data['status'] == 'success') return null;
+      return data['message'] ?? "Server Error";
+    } catch (e) {
+      return "Connection Error: $e";
+    }
+  }
+
+  // 9. للأب: رفض طلب الخروج
+  Future<String?> rejectExitRequest(
+    int parentId,
+    int studentId,
+    String message,
+  ) async {
+    try {
+      final response = await http.post(
+        Uri.parse(baseUrl),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'action': 'reject_exit',
+          'parent_id': parentId,
+          'student_id': studentId,
+          'message': message,
+        }),
+      );
+      if (response.body.isEmpty) return "Empty response";
+      final data = jsonDecode(response.body);
+      if (data['status'] == 'success') return null;
+      return data['message'] ?? "Server Error";
+    } catch (e) {
+      return "Connection Error: $e";
+    }
+  }
+
+  // 10. للأب: رفض طلب فتح القفل
+  Future<String?> rejectUnlockRequest(
+    int parentId,
+    int studentId,
+    String message,
+  ) async {
+    try {
+      final response = await http.post(
+        Uri.parse(baseUrl),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'action': 'reject_unlock',
+          'parent_id': parentId,
+          'student_id': studentId,
+          'message': message,
+        }),
+      );
+      if (response.body.isEmpty) return "Empty response";
+      final data = jsonDecode(response.body);
+      if (data['status'] == 'success') return null;
+      return data['message'] ?? "Server Error";
+    } catch (e) {
+      return "Connection Error: $e";
+    }
+  }
+
+  // 11. للابن: تأكيد قراءة التنبيه
+  Future<void> acknowledgeAlert(int studentId) async {
+    try {
+      await http.post(
+        Uri.parse(baseUrl),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'action': 'acknowledge_alert',
+          'student_id': studentId,
+        }),
+      );
+    } catch (_) {}
+  }
+
+  // دالة التحقق من التحديث
   Future<Map<String, dynamic>> checkUpdate() async {
     try {
       final response = await http.post(
         Uri.parse(baseUrl),
+        headers: {'Content-Type': 'application/json'},
         body: jsonEncode({'action': 'check_update'}),
       );
+      if (response.body.isEmpty) return {'status': 'error'};
       return jsonDecode(response.body);
     } catch (e) {
       return {'status': 'error'};

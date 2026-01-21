@@ -6,7 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'services/notification_service.dart';
 import 'screens/login_screen.dart';
 import 'screens/lock_screen/lock_screen.dart';
-import 'screens/register_student_screen.dart';
+import 'screens/parent_dashboard_screen.dart'; // Add this import
 
 final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
     FlutterLocalNotificationsPlugin();
@@ -85,9 +85,18 @@ class _SplashScreenState extends State<SplashScreen> {
 
   Future<void> _initApp() async {
     try {
-      await NotificationService().init();
-      await NotificationService().scheduleDailyNotification();
-      await NotificationService().requestPermissions();
+      // إضافة مهلة زمنية (Timeout) لتهيئة التنبيهات لتجنب تعليق التطبيق
+      await Future(() async {
+        await NotificationService().init();
+        await NotificationService().scheduleDailyNotification();
+        await NotificationService().requestPermissions();
+      }).timeout(
+        const Duration(seconds: 3),
+        onTimeout: () {
+          debugPrint("Notification init timed out");
+          return;
+        },
+      );
     } catch (e) {
       debugPrint("Error initializing notifications: $e");
     }
@@ -102,15 +111,24 @@ class _SplashScreenState extends State<SplashScreen> {
       if (!mounted) return;
 
       if (isLoggedIn) {
-        int studentId = prefs.getInt('student_id') ?? 0;
-        String gradeLevel = prefs.getString('grade_level') ?? 'middle_1';
+        // التحقق من نوع المستخدم
+        String userType = prefs.getString('user_type') ?? 'student';
 
-        Navigator.of(context).pushReplacement(
-          MaterialPageRoute(
-            builder: (_) =>
-                LockScreen(studentId: studentId, gradeLevel: gradeLevel),
-          ),
-        );
+        if (userType == 'parent') {
+          Navigator.of(context).pushReplacement(
+            MaterialPageRoute(builder: (_) => const ParentDashboardScreen()),
+          );
+        } else {
+          int studentId = prefs.getInt('student_id') ?? 0;
+          String gradeLevel = prefs.getString('grade_level') ?? 'middle_1';
+
+          Navigator.of(context).pushReplacement(
+            MaterialPageRoute(
+              builder: (_) =>
+                  LockScreen(studentId: studentId, gradeLevel: gradeLevel),
+            ),
+          );
+        }
       } else {
         Navigator.of(context).pushReplacement(
           MaterialPageRoute(builder: (_) => const LoginScreen()),
